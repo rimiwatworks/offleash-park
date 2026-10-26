@@ -39,6 +39,14 @@ body {
   padding-block: 5px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
   border-bottom: 1px solid var(--chrome-lo);
 }
+.barbtn {
+  margin-left: auto; font-family: var(--pixel); font-size: 13px; background: var(--chrome); color: var(--ink); cursor: pointer;
+  border: 2px solid; border-color: var(--chrome-hi) var(--chrome-lo) var(--chrome-lo) var(--chrome-hi);
+  padding: 2px 16px;
+}
+.barbtn:active { border-color: var(--chrome-lo) var(--chrome-hi) var(--chrome-hi) var(--chrome-lo); }
+.barbtn:focus-visible { outline: 2px dotted var(--ink); outline-offset: -5px; }
+.btnrow { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
 #bar .stat { display: flex; gap: 6px; align-items: center; font-variant-numeric: tabular-nums; }
 #bar .stat span:last-child { background: #fff; padding: 0 6px; min-width: 3.2em; text-align: right; }
 #bar .stat span:last-child { border: 2px solid; border-color: var(--chrome-lo) var(--chrome-hi) var(--chrome-hi) var(--chrome-lo); }
@@ -120,6 +128,7 @@ body {
     <span class="stat"><span class="ballicon"></span>ボール<span id="hBalls">0/0</span></span>
     <span class="stat">タイム<span id="hTime">0.0</span></span>
     <span class="stat">ベスト<span id="hBest">-</span></span>
+    <button class="barbtn" id="bQuit" hidden>終了</button>
   </div>
   <div id="main">
     <div id="view" class="sunk">
@@ -156,6 +165,19 @@ body {
             <p class="quote sunk" id="outQuote"></p>
             <p id="outInfo"></p>
             <button class="btn" id="bRetry">もう一回</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="overlay" id="ovQuit" hidden>
+        <div class="dlg bevel">
+          <div class="tt">終了</div>
+          <div class="bd">
+            <p>おさんぽを終了して、タイトルに戻りますか？<br>ステージ1からやり直しになります。</p>
+            <div class="btnrow">
+              <button class="btn" id="bQuitYes">タイトルに戻る</button>
+              <button class="btn" id="bQuitNo">続ける</button>
+            </div>
           </div>
         </div>
       </div>
@@ -588,6 +610,7 @@ addEventListener('keydown', e => {
   const k = e.key.toLowerCase(); keys[k] = true;
   if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault();
   if (k === 'v' && running) toggleView();
+  if (k === 'escape') { if (paused) resume(); else if (!attract) askQuit(); }
 });
 addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
@@ -969,7 +992,7 @@ function start(n) {
   chatEl.textContent = '';
   gust.next = clock + rnd(5, 10);
   log(null, `公園に入りました（ステージ${n}・係員${L.officers.length}人）`);
-  running = false; intro = { t: 0, go: false };
+  running = false; intro = { t: 0, go: false }; $('bQuit').hidden = false;
   countEl.textContent = 'よーい…'; countEl.classList.remove('go'); countEl.hidden = false;
   hud(L.balls.length);
 }
@@ -980,7 +1003,7 @@ function caught(o) {
   $('outQuote').textContent = `${o.name}「${q}」`;
   const got = L.balls.filter(b => b.got).length;
   $('outInfo').textContent = `ステージ${level}・ボール ${got}/${L.balls.length}・${L.time.toFixed(1)}秒で確保されました`;
-  setTimeout(() => { $('ovOut').hidden = false; $('bRetry').focus(); }, 900);
+  setTimeout(() => { if (attract) return; $('ovOut').hidden = false; $('bRetry').focus(); }, 900);
 }
 function clear() {
   running = false; sfx.win();
@@ -995,6 +1018,30 @@ $('bStart').onclick = () => { unlockAudio(); start(1); };
 $('bRetry').onclick = () => { unlockAudio(); start(level); };
 $('bNext').onclick = () => { unlockAudio(); start(level + 1); };
 
+// quit to the title: pauses play and asks first; after a stage ends it goes straight back
+let paused = false, wasRunning = false;
+function askQuit() {
+  if (!running && !intro) return toTitle(); // the stage already ended, or the dialog is open
+
+  paused = true; wasRunning = running; running = false;
+  $('ovQuit').hidden = false; $('bQuitNo').focus();
+}
+function resume() {
+  paused = false; running = wasRunning;
+  $('ovQuit').hidden = true;
+}
+function toTitle() {
+  paused = false; running = false; intro = null; countEl.hidden = true;
+  for (const id of ['ovQuit', 'ovOut', 'ovClear']) $(id).hidden = true;
+  level = 1; L = makeLevel(1); L.grace = 1e9; buildWorld();
+  attract = true; chatEl.textContent = '';
+  hud(L.balls.length);
+  $('bQuit').hidden = true; $('ovStart').hidden = false; $('bStart').focus();
+}
+$('bQuit').onclick = askQuit;
+$('bQuitYes').onclick = toTitle;
+$('bQuitNo').onclick = resume;
+
 function resize() {
   const w = view.clientWidth, h = view.clientHeight;
   if (!w || !h) return;
@@ -1005,7 +1052,7 @@ new ResizeObserver(resize).observe(view);
 
 function frame(ms) {
   const t = ms / 1000, dt = Math.min(.05, t - lastT || 0); lastT = t; clock = t;
-  if (intro) tickIntro(dt);
+  if (intro && !paused) tickIntro(dt);
   if (running && !document.hidden) update(dt);
   else if (attract) for (const o of L.officers) { // let the park live behind the title
     const tg = o.route[o.wp], r = moveTo(o, tg.x, tg.y, o.speed, dt); turn(o, r.a, 3, dt); if (r.d < 3) o.wp = (o.wp + 1) % o.route.length;
