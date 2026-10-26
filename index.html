@@ -706,8 +706,10 @@ function log(name, text) {
 }
 function say(o, text) {
   const B = o.bubble, x = B.x;
-  x.font = '30px DotGothic16, monospace';
-  const line = `${o.name}: ${text}`, w = Math.min(500, x.measureText(line).width + 28);
+  const line = `${o.name}: ${text}`;
+  let size = 30; // shrink long lines so they fit the bubble instead of being cut off
+  do { x.font = `${size}px DotGothic16, monospace`; } while (x.measureText(line).width > 480 && (size -= 2) > 14);
+  const w = Math.min(500, x.measureText(line).width + 28);
   x.clearRect(0, 0, 512, 64);
   x.fillStyle = 'rgba(255,255,255,.88)'; x.fillRect((512 - w) / 2, 6, w, 50);
   x.fillStyle = '#141414'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(line, 256, 32);
