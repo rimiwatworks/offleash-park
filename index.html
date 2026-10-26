@@ -342,12 +342,30 @@ function textSprite(w, h) {
   return { c, x: c.getContext('2d'), tex, s };
 }
 
-// the dog: white body, brown head with white blaze, big upright ears, brown hip patch, fluffy white tail
+// the dog: white body, brown head with white blaze, big upright ears, brown rump patch, fluffy white tail
+// Body faces are painted brown where they fall inside these blobs (unit-sphere direction, angular radius):
+// a large patch over the upper left rump, an extension toward the tail base, and a small spot below it.
+const RUMP_PATCH = [[-.55, .5, -.65, .58], [-.7, .65, -.15, .3], [-.3, -.05, -.95, .13]];
+function patchedBody() {
+  const geo = new THREE.IcosahedronGeometry(1, 3);
+  const pos = geo.attributes.position, cols = new Float32Array(pos.count * 3);
+  const white = new THREE.Color(0xf7f4ec), brown = new THREE.Color(0x7b3a22);
+  const blobs = RUMP_PATCH.map(([x, y, z, r]) => [new THREE.Vector3(x, y, z).normalize(), r]);
+  const c = new THREE.Vector3(), v = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i += 3) {
+    c.set(0, 0, 0);
+    for (let k = 0; k < 3; k++) c.add(v.fromBufferAttribute(pos, i + k));
+    c.normalize();
+    const col = blobs.some(([d, r]) => c.angleTo(d) < r) ? brown : white;
+    for (let k = 0; k < 3; k++) col.toArray(cols, (i + k) * 3);
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+  return geo;
+}
 function buildDog() {
   const g = new THREE.Group();
   const white = mat(0xf7f4ec), brown = mat(0x7b3a22), dark = mat(0x5e2a18);
-  const body = mesh(ball(1, 1), white, 0, 19, 0); body.scale.set(22, 11, 12); g.add(body);
-  const hip = mesh(ball(1, 1), brown, -14, 23, -5); hip.scale.set(8, 7, 7); g.add(hip);
+  const body = mesh(patchedBody(), mat(0xffffff, { vertexColors: true }), 0, 19, 0); body.scale.set(22, 11, 12); g.add(body);
   const chest = mesh(ball(1, 1), white, 17, 24, 0); chest.scale.set(9, 11, 9); g.add(chest);
   const head = mesh(ball(1, 1), brown, 26, 32, 0); head.scale.set(10, 9, 9); g.add(head);
   const blaze = mesh(ball(1, 1), white, 31, 34, 0); blaze.scale.set(7, 5, 2.6); g.add(blaze);
@@ -372,6 +390,71 @@ function buildDog() {
 }
 const DOG = buildDog();
 scene.add(DOG.g);
+
+// ---------- autumn gust: red and yellow leaves blow across the view ----------
+const GUST_LEN = 2.5;
+const leafGeo = (() => { // maple outline: five lobes, serrated edge, thin stem
+  const s = new THREE.Shape(), N = 90;
+  s.moveTo(-.03, -1);
+  for (let i = 1; i < N; i++) {
+    const p = -Math.PI + TAU * i / N;
+    const r = .32 + .68 * Math.pow(Math.abs(Math.cos(2.5 * p)), 1.4) + .07 * Math.abs(Math.sin(12.5 * p));
+    s.lineTo(r * Math.sin(p), r * Math.cos(p));
+  }
+  s.lineTo(.03, -1);
+  return new THREE.ShapeGeometry(s);
+})();
+const leafMats = [0xd23a26, 0xe9c235, 0xe0702a, 0xb82a22, 0xf2d548].map(c =>
+  mat(c, { side: THREE.DoubleSide, emissive: new THREE.Color(c).multiplyScalar(.3) }));
+const leaves = [];
+for (let i = 0; i < 70; i++) {
+  const m = new THREE.Mesh(leafGeo, leafMats[i % leafMats.length]);
+  m.visible = false; scene.add(m);
+  leaves.push({ m, v: new THREE.Vector3(), spin: new THREE.Vector3(), delay: 0, life: 0, size: 1, ph: 0 });
+}
+const gust = { t: -1, next: 7, wx: 1, wz: 0 };
+function startGust() {
+  gust.t = 0;
+  const f = camera.getWorldDirection(new THREE.Vector3()); f.y = 0; f.normalize();
+  const side = Math.random() < .5 ? 1 : -1, a = rnd(-.5, .5);
+  const rx = -f.z * side, rz = f.x * side; // blow mostly across the view
+  gust.wx = rx * Math.cos(a) - rz * Math.sin(a); gust.wz = rx * Math.sin(a) + rz * Math.cos(a);
+  const cp = camera.position;
+  for (const lf of leaves) {
+    const d = rnd(30, attract ? 900 : 320), off = rnd(200, 380), sp = rnd(300, 450);
+    lf.m.position.set(cp.x + f.x * d - gust.wx * off, rnd(4, Math.max(70, cp.y + 50)), cp.z + f.z * d - gust.wz * off);
+    lf.v.set(gust.wx * sp, rnd(-10, 25), gust.wz * sp);
+    lf.spin.set(rnd(-9, 9), rnd(-9, 9), rnd(-9, 9));
+    lf.m.rotation.set(rnd(0, TAU), rnd(0, TAU), rnd(0, TAU));
+    lf.delay = rnd(0, .9); lf.life = Math.min(GUST_LEN - lf.delay, rnd(1.3, 1.6));
+    lf.size = rnd(5, 8); lf.ph = rnd(0, TAU);
+  }
+  sfx.wind();
+  if (running) log(null, 'ピューッと木枯らしが吹いた');
+}
+function updateGust(dt) {
+  if (gust.t < 0) { if (clock > gust.next) startGust(); return; }
+  gust.t += dt;
+  for (const lf of leaves) {
+    const lt = gust.t - lf.delay;
+    lf.m.visible = lt > 0 && lt < lf.life;
+    if (!lf.m.visible) continue;
+    lf.m.position.addScaledVector(lf.v, dt);
+    lf.m.position.y += (Math.sin(lt * 7 + lf.ph) * 40 - 15) * dt;
+    lf.m.rotation.x += lf.spin.x * dt; lf.m.rotation.y += lf.spin.y * dt; lf.m.rotation.z += lf.spin.z * dt;
+    lf.m.scale.setScalar(lf.size * Math.min(1, lt * 5, (lf.life - lt) * 5));
+  }
+  const env = Math.sin(Math.PI * Math.min(1, gust.t / GUST_LEN));
+  for (const tr of L.trees) if (tr.g) { // trees lean with the wind
+    const a = .05 * env * (1 + .4 * Math.sin(clock * 9 + tr.x));
+    tr.g.rotation.z = -gust.wx * a; tr.g.rotation.x = gust.wz * a;
+  }
+  if (gust.t >= GUST_LEN) {
+    gust.t = -1; gust.next = clock + rnd(10, 22);
+    for (const lf of leaves) lf.m.visible = false;
+    for (const tr of L.trees) if (tr.g) tr.g.rotation.set(0, 0, 0);
+  }
+}
 
 function buildPerson(shirt, hat) {
   const g = new THREE.Group();
@@ -447,7 +530,7 @@ function buildWorld() {
     const c1 = mesh(ball(t.canopy, 0), cm, 0, 52 + t.canopy * .7, 0); c1.scale.y = .9; c1.rotation.y = rnd(0, 3);
     const c2 = mesh(ball(t.canopy * .65, 0), cm2, -t.canopy * .2, 52 + t.canopy * 1.25, t.canopy * .1);
     g.add(c1, c2); g.add(blob(t.canopy * .9));
-    t.mats = [cm, cm2];
+    t.mats = [cm, cm2]; t.g = g;
     world.add(g);
   }
   // bushes
@@ -564,6 +647,16 @@ const sfx = {
   whistle: () => { tone(2600, .5, 'sine', .08, 2400); setTimeout(() => tone(2600, .35, 'sine', .08, 2200), 520); },
   huh: () => tone(500, .15, 'triangle', .05, 700),
   chat: () => tone(1200, .05, 'square', .03),
+  wind: () => { // band-passed noise that swells and fades over the gust
+    if (!ac) return;
+    const len = GUST_LEN, n = Math.floor(ac.sampleRate * len), buf = ac.createBuffer(1, n, ac.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    const src = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain(), t = ac.currentTime;
+    src.buffer = buf; f.type = 'bandpass'; f.Q.value = 1.2;
+    f.frequency.setValueAtTime(400, t); f.frequency.linearRampToValueAtTime(1100, t + len * .45); f.frequency.linearRampToValueAtTime(500, t + len);
+    g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(.12, t + len * .35); g.gain.exponentialRampToValueAtTime(.0001, t + len);
+    src.connect(f).connect(g).connect(ac.destination); src.start(t); src.stop(t + len);
+  },
   win: () => [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => tone(f, .14, 'triangle', .07), i * 110)),
 };
 
@@ -842,6 +935,7 @@ function start(n) {
   const d = L.dog; camera.position.set(d.x, 120, d.y + 170);
   for (const id of ['ovStart', 'ovOut', 'ovClear']) $(id).hidden = true;
   chatEl.textContent = '';
+  gust.next = clock + rnd(5, 10);
   log(null, `公園に入りました（ステージ${n}・係員${L.officers.length}人）`);
   running = true; hud(L.balls.length);
 }
@@ -882,6 +976,7 @@ function frame(ms) {
     const tg = o.route[o.wp], r = moveTo(o, tg.x, tg.y, o.speed, dt); turn(o, r.a, 3, dt); if (r.d < 3) o.wp = (o.wp + 1) % o.route.length;
   }
   sync(t, dt);
+  updateGust(dt);
   updateCamera(dt);
   drawMini();
   renderer.render(scene, camera);
