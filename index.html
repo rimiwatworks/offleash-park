@@ -54,6 +54,14 @@ body {
   position: absolute; top: 8px; left: 8px; max-width: calc(100% - 170px);
   background: rgba(255,255,255,.85); padding: 3px 8px; font-size: 13px;
 }
+#count {
+  position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none;
+  font-size: clamp(40px, 9vw, 76px); color: #fff; letter-spacing: .06em;
+  text-shadow: 3px 0 0 var(--title-a), -3px 0 0 var(--title-a), 0 3px 0 var(--title-a), 0 -3px 0 var(--title-a), 5px 6px 0 rgba(0,0,0,.25);
+}
+#count.go { color: var(--ball); animation: pop .35s ease-out; }
+@keyframes pop { from { transform: scale(1.6); } to { transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { #count.go { animation: none; } }
 #chat {
   position: absolute; left: 8px; bottom: 8px; max-width: min(460px, calc(100% - 16px));
   display: flex; flex-direction: column; gap: 2px; pointer-events: none;
@@ -119,6 +127,7 @@ body {
       <canvas id="mini" class="sunk"></canvas>
       <div id="tip">茂みに入ると見つかりにくい</div>
       <div id="chat"></div>
+      <div id="count" hidden>よーい…</div>
 
       <div class="overlay" id="ovStart">
         <div class="dlg bevel">
@@ -231,7 +240,7 @@ function makeLevel(n) {
     if (Math.random() < .5) r.reverse();
     if (Math.random() < .35) r = [r[0], r[2]];
     const segs = routeSegs(r);
-    if (segs.some(([a, b]) => segDist(gate.x, gate.y, a.x, a.y, b.x, b.y) < 300)) continue;
+    if (segs.some(([a, b]) => segDist(gate.x, gate.y, a.x, a.y, b.x, b.y) < 380)) continue;
     routes.push(r); i++;
   }
   const allSegs = routes.flatMap(routeSegs);
@@ -247,7 +256,7 @@ function makeLevel(n) {
   const nTrees = Math.round(W * H / 52000);
   for (let tries = 0; trees.length < nTrees && tries < 3000; tries++) {
     const x = rnd(60, W - 60), y = rnd(60, H - 60);
-    if (nearRoute(x, y) < 50 || dist(x, y, gate.x, gate.y) < 160) continue;
+    if (nearRoute(x, y) < 50 || dist(x, y, gate.x, gate.y) < 160 || dist(x, y, gate.x, gate.y - 180) < 110) continue;
     if (ponds.some(p => dist(x, y, p.x, p.y) < p.r + 50)) continue;
     if (trees.some(t => dist(x, y, t.x, t.y) < 105)) continue;
     trees.push({ x, y, trunk: 13, block: 22, canopy: rnd(38, 54), hue: rnd(-.03, .03) });
@@ -256,7 +265,7 @@ function makeLevel(n) {
   const nBush = Math.round(W * H / 62000);
   for (let tries = 0; bushes.length < nBush && tries < 3000; tries++) {
     const r = rnd(30, 44), x = rnd(50 + r, W - 50 - r), y = rnd(50 + r, H - 60 - r);
-    if (nearRoute(x, y) < r + 6 || dist(x, y, gate.x, gate.y) < 140) continue;
+    if (nearRoute(x, y) < r + 6 || dist(x, y, gate.x, gate.y) < 140 || dist(x, y, gate.x, gate.y - 180) < r + 90) continue;
     if (ponds.some(p => dist(x, y, p.x, p.y) < p.r + r + 20)) continue;
     if (trees.some(t => dist(x, y, t.x, t.y) < r + 30)) continue;
     if (bushes.some(b => dist(x, y, b.x, b.y) < r + b.r + 30)) continue;
@@ -284,7 +293,7 @@ function makeLevel(n) {
   });
   return {
     W, H, gate, ponds, trees, bushes, balls, officers, routes,
-    dog: { x: gate.x, y: gate.y - 70, dir: -Math.PI / 2, step: 0, moving: false, hidden: false, wag: 0 },
+    dog: { x: gate.x, y: gate.y - 180, dir: -Math.PI / 2, step: 0, moving: false, hidden: false, wag: 0 },
     time: 0, grace: 1.6, ground: paintGround(W, H, routes, ponds, gate),
   };
 }
@@ -343,20 +352,22 @@ function textSprite(w, h) {
 }
 
 // the dog: white body, brown head with white blaze, big upright ears, brown rump patch, fluffy white tail
-// Body faces are painted brown where they fall inside these blobs (unit-sphere direction, angular radius):
-// a large patch over the upper left rump, an extension toward the tail base, and a small spot below it.
-const RUMP_PATCH = [[-.55, .5, -.65, .58], [-.7, .65, -.15, .3], [-.3, -.05, -.95, .13]];
+// Body faces are painted brown inside these patches, laid out along the spine:
+// x runs nose (+1) to tail (-1); psi is the angle around the spine, 0 on top and positive down the left side.
+// [x center, x half-length, psi center, psi half-width, edge squareness]
+const RUMP_PATCH = [[-.56, .34, .8, .7, 3], [-.3, .09, 1.68, .16, 2]];
 function patchedBody() {
-  const geo = new THREE.IcosahedronGeometry(1, 3);
+  const geo = new THREE.IcosahedronGeometry(1, 4);
   const pos = geo.attributes.position, cols = new Float32Array(pos.count * 3);
   const white = new THREE.Color(0xf7f4ec), brown = new THREE.Color(0x7b3a22);
-  const blobs = RUMP_PATCH.map(([x, y, z, r]) => [new THREE.Vector3(x, y, z).normalize(), r]);
   const c = new THREE.Vector3(), v = new THREE.Vector3();
+  const inPatch = ([cx, hx, cp, hp, n]) =>
+    Math.abs((c.x - cx) / hx) ** n + Math.abs((Math.atan2(-c.z, c.y) - cp) / hp) ** n < 1;
   for (let i = 0; i < pos.count; i += 3) {
     c.set(0, 0, 0);
     for (let k = 0; k < 3; k++) c.add(v.fromBufferAttribute(pos, i + k));
     c.normalize();
-    const col = blobs.some(([d, r]) => c.angleTo(d) < r) ? brown : white;
+    const col = RUMP_PATCH.some(inPatch) ? brown : white;
     for (let k = 0; k < 3; k++) col.toArray(cols, (i + k) * 3);
   }
   geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
@@ -646,6 +657,7 @@ const sfx = {
   ball: () => { tone(660, .08); setTimeout(() => tone(990, .1), 70); },
   whistle: () => { tone(2600, .5, 'sine', .08, 2400); setTimeout(() => tone(2600, .35, 'sine', .08, 2200), 520); },
   huh: () => tone(500, .15, 'triangle', .05, 700),
+  go: () => tone(2900, .55, 'sine', .09, 2750),
   chat: () => tone(1200, .05, 'square', .03),
   wind: () => { // band-passed noise that swells and fades over the gust
     if (!ac) return;
@@ -861,12 +873,33 @@ function sync(t, dt) {
 }
 
 let clock = 0, attract = true;
+// stage intro: the camera circles the dog once ("よーい…"), then a whistle and "スタート！"
+const INTRO_ORBIT = 2.8, INTRO_END = 3.6;
+let intro = null;
+const countEl = $('count');
+function tickIntro(dt) {
+  intro.t += dt;
+  if (!intro.go && intro.t >= INTRO_ORBIT) {
+    intro.go = true; running = true; sfx.go();
+    countEl.textContent = 'スタート！'; countEl.classList.add('go');
+  }
+  if (intro.t >= INTRO_END) { intro = null; countEl.hidden = true; }
+}
 function updateCamera(dt) {
   const d = L.dog;
   if (attract) {
     const a = clock * .06, R = Math.max(L.W, L.H) * .75;
     camera.position.set(L.W / 2 + Math.cos(a) * R, 520, L.H / 2 + Math.sin(a) * R);
     camera.lookAt(L.W / 2, 0, L.H / 2);
+    return;
+  }
+  if (intro && !intro.go) { // ends exactly where the third-person spring arm sits
+    const k = intro.t / INTRO_ORBIT, e = k < .5 ? 2 * k * k : 1 - (2 - 2 * k) ** 2 / 2;
+    const a = d.dir + Math.PI + TAU * (1 - e);
+    const r = 100 + (170 * Math.cos(.42) - 100) * e, h = 40 + (24 + 170 * Math.sin(.42) - 40) * e;
+    camera.position.set(d.x + Math.cos(a) * r, h, d.y + Math.sin(a) * r);
+    camera.lookAt(d.x, 24 + 6 * e, d.y);
+    camera.fov = 62; camera.updateProjectionMatrix();
     return;
   }
   if (viewMode === 'pov') {
@@ -932,12 +965,13 @@ function start(n) {
   level = n; L = makeLevel(n); buildWorld();
   attract = false;
   camState.yaw = L.dog.dir; camState.pitch = .42;
-  const d = L.dog; camera.position.set(d.x, 120, d.y + 170);
   for (const id of ['ovStart', 'ovOut', 'ovClear']) $(id).hidden = true;
   chatEl.textContent = '';
   gust.next = clock + rnd(5, 10);
   log(null, `公園に入りました（ステージ${n}・係員${L.officers.length}人）`);
-  running = true; hud(L.balls.length);
+  running = false; intro = { t: 0, go: false };
+  countEl.textContent = 'よーい…'; countEl.classList.remove('go'); countEl.hidden = false;
+  hud(L.balls.length);
 }
 function caught(o) {
   running = false; sfx.whistle();
@@ -971,6 +1005,7 @@ new ResizeObserver(resize).observe(view);
 
 function frame(ms) {
   const t = ms / 1000, dt = Math.min(.05, t - lastT || 0); lastT = t; clock = t;
+  if (intro) tickIntro(dt);
   if (running && !document.hidden) update(dt);
   else if (attract) for (const o of L.officers) { // let the park live behind the title
     const tg = o.route[o.wp], r = moveTo(o, tg.x, tg.y, o.speed, dt); turn(o, r.a, 3, dt); if (r.d < 3) o.wp = (o.wp + 1) % o.route.length;
